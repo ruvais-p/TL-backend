@@ -340,6 +340,13 @@ class Auth0ExchangeApiTests(TestCase):
         self.assertEqual(unknown.status_code, 403)
         self.assertEqual(wrong_portal.data, unknown.data)
 
+    def test_auto_portal_admits_staff_and_learners(self):
+        for user in (self.admin, self.student):
+            response = self.exchange(user, "auto")
+            self.assertEqual(response.status_code, 200, response.data)
+            self.assertIn("access", response.data)
+            self.assertIn("refresh", response.data)
+
     def test_invalid_assertion_is_rejected_without_tokens(self):
         with patch("accounts.views.exchange_auth0_assertion", side_effect=Auth0VerificationError("expired")):
             response = self.client.post(

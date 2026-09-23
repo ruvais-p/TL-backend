@@ -69,7 +69,13 @@ class Auth0ExchangeView(APIView):
                 {"detail": "This account cannot access the requested workspace."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        if not portal_admission(user, serializer.validated_data["portal"]).allowed:
+        portal = serializer.validated_data["portal"]
+        admitted = (
+            any(portal_admission(user, candidate).allowed for candidate in ("staff", "learner"))
+            if portal == "auto"
+            else portal_admission(user, portal).allowed
+        )
+        if not admitted:
             return Response(
                 {"detail": "This account cannot access the requested workspace."},
                 status=status.HTTP_403_FORBIDDEN,

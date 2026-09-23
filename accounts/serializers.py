@@ -61,7 +61,7 @@ class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 class Auth0ExchangeSerializer(serializers.Serializer):
     assertion = serializers.CharField(write_only=True, trim_whitespace=False)
-    portal = serializers.ChoiceField(choices=sorted(PORTALS))
+    portal = serializers.ChoiceField(choices=[*sorted(PORTALS), "auto"])
 
 
 class Auth0IdentitySummarySerializer(serializers.ModelSerializer):
