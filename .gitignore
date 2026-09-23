@@ -1,0 +1,29 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+
+# Tests, coverage, and tooling
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Django runtime data
+*.sqlite3
+media/
+private_documents/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store

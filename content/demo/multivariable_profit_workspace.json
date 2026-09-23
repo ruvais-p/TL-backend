@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "renderer": "geogebra",
+  "renderer_config": {
+    "app_name": "classic",
+    "width": 960,
+    "height": 620,
+    "parameters": {
+      "showToolBar": false,
+      "showMenuBar": false,
+      "showAlgebraInput": false,
+      "showResetIcon": false,
+      "enableRightClick": false,
+      "enableShiftDragZoom": true
+    },
+    "workspace": {
+      "type": "multivariable_profit",
+      "version": 1,
+      "title": "Two TV models, one profit hill",
+      "scenario": "A factory makes 19-inch and 21-inch televisions. Producing more units earns additional contribution, but price pressure and shared factory congestion eventually pull profit down. Explore the landscape and recommend a better production mix.",
+      "currency": "₹",
+      "products": [
+        {
+          "id": "small_tv",
+          "label": "19-inch TVs",
+          "unit": "TVs per month",
+          "price": 339,
+          "price_drop": 0.01,
+          "unit_cost": 195,
+          "initial": 3000,
+          "min": 0,
+          "max": 8500,
+          "step": 100
+        },
+        {
+          "id": "large_tv",
+          "label": "21-inch TVs",
+          "unit": "TVs per month",
+          "price": 399,
+          "price_drop": 0.01,
+          "unit_cost": 225,
+          "initial": 5000,
+          "min": 0,
+          "max": 11000,
+          "step": 100
+        }
+      ],
+      "cross_effect": 0.007,
+      "fixed_cost": 400000,
+      "target_tolerance": 150,
+      "steps": [
+        {
+          "kind": "hill",
+          "title": "Hill",
+          "instruction": "Read the contour map, compare today's point with the gold peak, and switch to the 3D surface to see why this model has a highest point."
+        },
+        {
+          "kind": "slope",
+          "title": "Slope",
+          "instruction": "Hold one TV model fixed. Move the other and connect the tangent line with the live value of one more unit."
+        },
+        {
+          "kind": "walk",
+          "title": "Walk",
+          "instruction": "Use both production sliders or drag the dark point. Follow the green gradient arrow until the factory is close to the top."
+        },
+        {
+          "kind": "result",
+          "title": "Result",
+          "instruction": "Compare today's production mix with the best mix and turn the mathematical result into a management recommendation."
+        },
+        {
+          "kind": "question",
+          "title": "Your Q",
+          "instruction": "Explain the recommendation, then change the business inputs to generate a new question from the same reusable workshop."
+        }
+      ],
+      "questions": {
+        "slope": {
+          "prompt": "With {held_product} held fixed, what happens to profit when the factory produces one more {moving_product}?",
+          "options": [
+            {
+              "value": "increase",
+              "label": "Profit goes up"
+            },
+            {
+              "value": "decrease",
+              "label": "Profit goes down"
+            },
+            {
+              "value": "same",
+              "label": "Profit stays the same"
+            }
+          ]
+        },
+        "reflection": {
+          "prompt": "What production change should management make first, and what evidence from the graph supports your recommendation?",
+          "minimum_characters": 40
+        }
+      }
+    }
+  }
+}

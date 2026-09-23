@@ -1,0 +1,16 @@
+asgiref>=3.8,<4
+channels>=4.2.2,<5
+channels-redis>=4.3,<5
+daphne>=4.2,<5
+Django>=5.2,<5.3
+django-cors-headers==4.9.0
+djangorestframework>=3.16,<3.17
+djangorestframework-simplejwt==5.5.1
+pytest>=8.4,<10
+pytest-django>=4.11,<5
+factory-boy==3.3.3
+psycopg2-binary==2.9.12
+PyJWT[crypto]>=2.9,<3
+python-dotenv>=1.1,<2
+sqlparse>=0.5,<1
+tzdata>=2025.2

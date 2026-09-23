@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "renderer": "geogebra",
+  "renderer_config": {
+    "app_name": "graphing",
+    "width": 960,
+    "height": 620,
+    "parameters": {
+      "showToolBar": false,
+      "showMenuBar": false,
+      "showAlgebraInput": false,
+      "enableRightClick": false,
+      "enableShiftDragZoom": true
+    },
+    "workspace": {
+      "type": "linear_programming",
+      "title": "Example 1: LP Model Formulation",
+      "problem_statement": "A manufacturing company produces Products A, B, and C. Capacity is limited to 50 units of A, 25 units of B, and 30 units of C. Assembly has 100 man-hours available. Management requires at least 20 units of A and at least 15 units across B and C. Explore the feasible production plans and find the most profitable allocation.",
+      "axis_variables": ["x1", "x2"],
+      "variables": [
+        {
+          "id": "x1",
+          "label": "Product A",
+          "symbol": "x₁",
+          "unit": "units",
+          "min": 20,
+          "max": 50,
+          "initial": 20,
+          "step": 1
+        },
+        {
+          "id": "x2",
+          "label": "Product B",
+          "symbol": "x₂",
+          "unit": "units",
+          "min": 0,
+          "max": 25,
+          "initial": 5,
+          "step": 1
+        },
+        {
+          "id": "x3",
+          "label": "Product C",
+          "symbol": "x₃",
+          "unit": "units",
+          "min": 0,
+          "max": 30,
+          "initial": 10,
+          "step": 1
+        }
+      ],
+      "objective": {
+        "label": "Profit",
+        "sense": "maximize",
+        "currency": "₹",
+        "coefficients": {
+          "x1": 12,
+          "x2": 20,
+          "x3": 45
+        }
+      },
+      "constraints": [
+        {
+          "id": "assembly_time",
+          "label": "Assembly time",
+          "coefficients": {
+            "x1": 0.8,
+            "x2": 1.7,
+            "x3": 2.5
+          },
+          "operator": "<=",
+          "rhs": 100
+        },
+        {
+          "id": "combined_commitment",
+          "label": "Products B and C commitment",
+          "coefficients": {
+            "x1": 0,
+            "x2": 1,
+            "x3": 1
+          },
+          "operator": ">=",
+          "rhs": 15
+        }
+      ]
+    }
+  }
+}
