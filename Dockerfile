@@ -41,7 +41,6 @@ USER app
 EXPOSE 8000
 
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
-CMD ["daphne", "-b", "0.0.0.0", "-p", "8000", "config.asgi:application"]
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
-    CMD ["python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), 2).close()"]
+    CMD ["python", "-c", "import os, socket; socket.create_connection(('127.0.0.1', int(os.getenv('PORT', '8000'))), 2).close()"]

@@ -124,3 +124,50 @@ Normal administrators receive `manage_users` but not `manage_permissions`. The a
 ## Deployment
 
 Use `config.settings.production`, TLS, an ASGI server, managed PostgreSQL, rotated secrets, restricted CORS/hosts/socket origins, Redis, and object storage. Run migrations and `setup_groups` during controlled deployment. Keep course support disabled until its `wss://` route and privacy controls pass staging verification. Do not run demo seed commands in production.
+
+### Railway (Dockerfile)
+
+Railway detects the root `Dockerfile` automatically. Create a project, add this
+GitHub repository as the backend service, and add managed PostgreSQL and Redis
+services to the same project. In the backend service's Variables tab, add:
+
+```text
+DJANGO_SECRET_KEY=<at-least-50-random-characters>
+DJANGO_SETTINGS_MODULE=config.settings.production
+DJANGO_SECURE_SSL_REDIRECT=true
+PGDATABASE=${{Postgres.PGDATABASE}}
+PGUSER=${{Postgres.PGUSER}}
+PGPASSWORD=${{Postgres.PGPASSWORD}}
+PGHOST=${{Postgres.PGHOST}}
+PGPORT=${{Postgres.PGPORT}}
+REDIS_URL=${{Redis.REDIS_URL}}
+RUN_MIGRATIONS=true
+RUN_SETUP_GROUPS=true
+MOODLE_SSO_SECRET=<strong-random-secret>
+MOODLE_ORIGIN=https://your-moodle-host.example
+CORS_ALLOWED_ORIGINS=https://your-frontend.example,https://your-moodle-host.example
+COURSE_SUPPORT_CHAT_ALLOWED_ORIGINS=https://your-frontend.example,https://your-moodle-host.example
+```
+
+Use the actual Railway service names in the reference variables if they differ
+from `Postgres` or `Redis`. Generate a public domain for the backend and set the
+deployment healthcheck path to `/api/v1/health/`. The container listens on the
+Railway-provided `PORT`; the generated `RAILWAY_PUBLIC_DOMAIN` and Railway's
+healthcheck hostname are admitted automatically.
+
+For uploaded media and private documents, attach persistent storage before
+production use. One option is a Railway volume mounted at `/data`, with
+`MEDIA_ROOT=/data/media`, `PRIVATE_DOCUMENT_ROOT=/data/private_documents`, and
+`RAILWAY_RUN_UID=0` (Railway mounts volumes as root). Prefer S3-compatible
+object storage for horizontally scaled deployments.
+
+After the first successful deployment, open a Railway shell for the backend and
+create the initial administrator:
+
+```bash
+python manage.py createsuperuser
+```
+
+For safer multi-replica deployments, move `migrate` and `setup_groups` to a
+Railway pre-deploy command and set both `RUN_*` variables to `false` so only one
+deployment job changes the database.

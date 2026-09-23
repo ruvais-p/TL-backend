@@ -16,4 +16,8 @@ if is_enabled "${RUN_SETUP_GROUPS:-false}"; then
     python manage.py setup_groups
 fi
 
+if [ "$#" -eq 0 ]; then
+    set -- daphne -b 0.0.0.0 -p "${PORT:-8000}" config.asgi:application
+fi
+
 exec "$@"

@@ -7,6 +7,8 @@ from .base import *  # noqa: F403
 DEBUG = False
 if len(SECRET_KEY) < 50 or len(set(SECRET_KEY)) < 5:  # noqa: F405
     raise ImproperlyConfigured("DJANGO_SECRET_KEY must be a strong value of at least 50 characters.")
+if os.getenv("RAILWAY_ENVIRONMENT_ID"):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = os.getenv("DJANGO_SECURE_SSL_REDIRECT", "true").lower() == "true"
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True

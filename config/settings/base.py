@@ -14,6 +14,11 @@ ALLOWED_HOSTS = [
     for value in os.getenv("DJANGO_ALLOWED_HOSTS", os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1")).split(",")
     if value.strip()
 ]
+RAILWAY_PUBLIC_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+if RAILWAY_PUBLIC_DOMAIN:
+    ALLOWED_HOSTS.append(RAILWAY_PUBLIC_DOMAIN)
+if os.getenv("RAILWAY_ENVIRONMENT_ID"):
+    ALLOWED_HOSTS.append("healthcheck.railway.app")
 
 INSTALLED_APPS = [
     "daphne", "django.contrib.auth", "django.contrib.contenttypes",
@@ -36,11 +41,11 @@ ASGI_APPLICATION = "config.asgi.application"
 
 DATABASES = {"default": {
     "ENGINE": "django.db.backends.postgresql",
-    "NAME": os.getenv("POSTGRES_DB", "tella_dev"),
-    "USER": os.getenv("POSTGRES_USER", "tella"),
-    "PASSWORD": os.getenv("POSTGRES_PASSWORD", "tella_dev_local"),
-    "HOST": os.getenv("POSTGRES_HOST", "127.0.0.1"),
-    "PORT": os.getenv("POSTGRES_PORT", "5432"),
+    "NAME": os.getenv("POSTGRES_DB", os.getenv("PGDATABASE", "tella_dev")),
+    "USER": os.getenv("POSTGRES_USER", os.getenv("PGUSER", "tella")),
+    "PASSWORD": os.getenv("POSTGRES_PASSWORD", os.getenv("PGPASSWORD", "tella_dev_local")),
+    "HOST": os.getenv("POSTGRES_HOST", os.getenv("PGHOST", "127.0.0.1")),
+    "PORT": os.getenv("POSTGRES_PORT", os.getenv("PGPORT", "5432")),
     "CONN_MAX_AGE": int(os.getenv("POSTGRES_CONN_MAX_AGE", "60")),
 }}
 
@@ -57,7 +62,7 @@ TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
 MEDIA_URL = "/media/"
-MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", BASE_DIR / "media"))
 PRIVATE_DOCUMENT_ROOT = Path(
     os.getenv("PRIVATE_DOCUMENT_ROOT", BASE_DIR / "private_documents")
 )
