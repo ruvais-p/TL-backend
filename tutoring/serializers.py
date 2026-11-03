@@ -107,6 +107,9 @@ class CourseSupportConversationSerializer(serializers.ModelSerializer):
         }
 
     def get_groups(self, obj):
+        groups_by_pair = self.context.get("groups_by_pair")
+        if groups_by_pair is not None:
+            return groups_by_pair.get((obj.student_id, obj.course_version_id), [])
         return list(
             StudentGroup.objects.filter(
                 status=StudentGroup.Status.ACTIVE,
@@ -117,18 +120,30 @@ class CourseSupportConversationSerializer(serializers.ModelSerializer):
         )
 
     def get_last_message(self, obj):
+        messages = self.context.get("last_messages")
+        if messages is not None:
+            message = messages.get(getattr(obj, "last_message_id", None))
+            return CourseSupportMessageSerializer(message).data if message else None
         message = obj.support_messages.select_related("sender").order_by("-sequence").first()
         return CourseSupportMessageSerializer(message).data if message else None
 
     def get_unread_count(self, obj):
+        if hasattr(obj, "actor_last_read"):
+            return max(0, obj.last_sequence - (obj.actor_last_read or 0))
         actor = self.context["request"].user
         state = obj.read_states.filter(user=actor).first()
         return max(0, obj.last_sequence - (state.last_read_sequence if state else 0))
 
     def get_can_send(self, obj):
+        flags = self.context.get("staff_flags")
+        if flags is not None:
+            return flags["can_send"]
         return can_send_support_message(user=self.context["request"].user, conversation=obj)
 
     def get_can_close(self, obj):
+        flags = self.context.get("staff_flags")
+        if flags is not None:
+            return flags["can_close"]
         return can_close_support_conversation(user=self.context["request"].user, conversation=obj)
 
 

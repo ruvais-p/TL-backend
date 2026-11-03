@@ -56,6 +56,18 @@ from .application_services import (
 )
 from .private_documents import open_resume
 
+def resume_response(stream, document):
+    response = FileResponse(
+        stream,
+        as_attachment=True,
+        filename=document.original_filename,
+        content_type=document.mime_type,
+    )
+    response["X-Content-Type-Options"] = "nosniff"
+    response["Cache-Control"] = "private, no-store"
+    return response
+
+
 EVENT_BADGES = {
     PointEvent.Reason.REACH_PEAK: BadgeAward.Code.FIRST_PEAK,
     PointEvent.Reason.EXPLORE_SLOPES: BadgeAward.Code.SLOPE_READER,
@@ -110,27 +122,26 @@ class ProgressUpsertView(APIView):
         serializer = ProgressUpsertSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
-        activity = LearningActivity.objects.filter(id=data["activity"]).first()
+        activity = LearningActivity.objects.filter(id=data["activity"]).select_related(
+            "subtopic__chapter__course_version__course"
+        ).first()
         if not activity:
             return Response({"detail": "Activity not found."}, status=status.HTTP_404_NOT_FOUND)
 
         with transaction.atomic():
             enrollment = _ensure_enrollment(request.user, activity)
+            requested_status = ProgressService.normalize_status(data.get("status"))
             progress = ProgressService.record_activity_progress(
                 student=request.user, activity=activity,
-                progress_percentage=data.get("progress_percentage", 100 if data.get("status") == "completed" else 0),
+                progress_percentage=data.get("progress_percentage", 100 if requested_status == "COMPLETED" else 0),
                 time_spent_seconds=data.get("time_spent_seconds", 0),
-                status="COMPLETED" if data.get("status") == "completed" else None,
+                status=requested_status,
                 enrollment=enrollment,
             )
-            extra = progress.extra or {}
             incoming = data.get("extra") or {}
-            extra.update(incoming)
-            progress.extra = extra
-            progress.status = data.get("status") or progress.status
-            if progress.status == "completed" and not progress.completed_at:
-                progress.completed_at = timezone.now()
-            progress.save()
+            if incoming:
+                progress.extra = {**(progress.extra or {}), **incoming}
+                progress.save(update_fields=["extra", "updated_at"])
             awarded_points, awarded_badge = _award_event(
                 request.user, activity, data.get("event")
             )
@@ -145,6 +156,8 @@ class ActivityProgressActionView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, activity_id, action):
+        if action not in {"start", "progress", "complete"}:
+            return Response({"detail": "Not found."}, status=404)
         activity = LearningActivity.objects.filter(id=activity_id).select_related("subtopic__chapter__course_version__course").first()
         if activity is None:
             return Response({"detail": "Activity not found."}, status=404)
@@ -155,12 +168,12 @@ class ActivityProgressActionView(APIView):
         data = serializer.validated_data
         if action == "start":
             data["progress_percentage"] = max(0, data.get("progress_percentage", 0))
-            data["status"] = "IN_PROGRESS"
+            data["status"] = None
         elif action == "complete":
             data["progress_percentage"] = 100
             data["status"] = "COMPLETED"
         else:
-            data["status"] = data.get("status")
+            data["status"] = ProgressService.normalize_status(data.get("status"))
         progress = ProgressService.record_activity_progress(
             student=request.user, activity=activity,
             progress_percentage=data.get("progress_percentage", 0),
@@ -290,12 +303,7 @@ class LearnerApplicationResumeView(APIView):
             OpportunityApplicationDocument, application=application
         )
         stream = open_resume(document=document, user=request.user)
-        return FileResponse(
-            stream,
-            as_attachment=True,
-            filename=document.original_filename,
-            content_type=document.mime_type,
-        )
+        return resume_response(stream, document)
 
 
 def visible_staff_activity_progress(user):
@@ -468,12 +476,7 @@ class OpportunityApplicationStaffViewSet(viewsets.ReadOnlyModelViewSet):
             OpportunityApplicationDocument, application=application
         )
         stream = open_resume(document=document, user=request.user)
-        return FileResponse(
-            stream,
-            as_attachment=True,
-            filename=document.original_filename,
-            content_type=document.mime_type,
-        )
+        return resume_response(stream, document)
 
 
 class LegacyAssessmentAttemptStaffViewSet(viewsets.ReadOnlyModelViewSet):

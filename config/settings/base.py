@@ -46,7 +46,10 @@ DATABASES = {"default": {
     "PASSWORD": os.getenv("POSTGRES_PASSWORD", os.getenv("PGPASSWORD", "tella_dev_local")),
     "HOST": os.getenv("POSTGRES_HOST", os.getenv("PGHOST", "127.0.0.1")),
     "PORT": os.getenv("POSTGRES_PORT", os.getenv("PGPORT", "5432")),
-    "CONN_MAX_AGE": int(os.getenv("POSTGRES_CONN_MAX_AGE", "60")),
+    # Persistent connections are thread-bound and leak under ASGI (Daphne);
+    # keep them off and rely on PgBouncer or psycopg pooling instead.
+    "CONN_MAX_AGE": int(os.getenv("POSTGRES_CONN_MAX_AGE", "0")),
+    "CONN_HEALTH_CHECKS": True,
 }}
 
 AUTH_USER_MODEL = "accounts.User"
@@ -109,6 +112,8 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": ("rest_framework_simplejwt.authentication.JWTAuthentication",),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_RENDERER_CLASSES": ("rest_framework.renderers.JSONRenderer",),
+    "EXCEPTION_HANDLER": "config.exceptions.api_exception_handler",
+    "DEFAULT_PAGINATION_CLASS": "config.pagination.OptionalPageNumberPagination",
     "DEFAULT_THROTTLE_CLASSES": (
         "rest_framework.throttling.AnonRateThrottle", "rest_framework.throttling.UserRateThrottle",
     ),
@@ -116,6 +121,7 @@ REST_FRAMEWORK = {
         "anon": "60/min",
         "user": "300/min",
         "auth0_exchange": os.getenv("AUTH0_EXCHANGE_THROTTLE_RATE", "10/min"),
+        "auth_login": os.getenv("AUTH_LOGIN_THROTTLE_RATE", "10/min"),
         "course_chat": os.getenv("COURSE_CHAT_THROTTLE_RATE", "10/min"),
         "course_support_send": COURSE_SUPPORT_CHAT_SEND_RATE,
         "course_support_connection": COURSE_SUPPORT_CHAT_CONNECTION_RATE,

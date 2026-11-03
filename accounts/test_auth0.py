@@ -380,13 +380,13 @@ class Auth0ExchangeApiTests(TestCase):
         tokens = token_pair_for_user(self.student, "moodle")
         self.assertEqual(RefreshToken(tokens["refresh"])["auth_method"], "moodle")
 
-    @override_settings(MOODLE_SSO_SECRET="moodle-test-secret")
+    @override_settings(MOODLE_SSO_SECRET="moodle-test-secret-0123456789abcdef0123")
     def test_existing_moodle_exchange_issues_moodle_platform_token(self):
         timestamp = int(time.time())
         email = "moodle-auth0@example.com"
         payload = f"moodle-77|{email}|{timestamp}"
         signature = hmac.new(
-            b"moodle-test-secret", payload.encode(), hashlib.sha256
+            b"moodle-test-secret-0123456789abcdef0123", payload.encode(), hashlib.sha256
         ).hexdigest()
         response = self.client.post(
             reverse("accounts:moodle-exchange"),

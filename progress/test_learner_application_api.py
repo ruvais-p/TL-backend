@@ -89,6 +89,8 @@ class LearnerApplicationAPITests(TestCase):
             f"/api/v1/career/applications/{application_id}/resume/"
         )
         self.assertEqual(owner.status_code, 200)
+        for close in owner._resource_closers:  # release the file without firing request_finished
+            close()
 
         self.client.force_authenticate(self.other)
         denied = self.client.get(

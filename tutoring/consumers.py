@@ -32,35 +32,53 @@ def _allow_rate(key_prefix, user_id, rate):
     limit, seconds = _parse_rate(rate)
     bucket = int(time.time() // seconds)
     key = f"course-support:{key_prefix}:{user_id}:{bucket}"
-    cache.add(key, 0, timeout=seconds + 1)
-    return cache.incr(key) <= limit
+    return _increment(key, seconds + 1) <= limit
+
+
+def _increment(key, timeout):
+    # add() then incr() races with expiry; recreate the key if it vanished.
+    cache.add(key, 0, timeout=timeout)
+    try:
+        return cache.incr(key)
+    except ValueError:
+        cache.set(key, 1, timeout=timeout)
+        return 1
+
+
+# Active-connection counts expire quickly so a crashed worker or a deploy
+# cannot lock a user out; live sockets refresh the TTL as they are used.
+ACTIVE_CONNECTION_TTL_SECONDS = 300
 
 
 def _claim_connection(user_id):
     if not _allow_rate("connections", user_id, settings.COURSE_SUPPORT_CHAT_CONNECTION_RATE):
         return False
     key = f"course-support:active:{user_id}"
-    cache.add(key, 0, timeout=3600)
-    count = cache.incr(key)
+    count = _increment(key, ACTIVE_CONNECTION_TTL_SECONDS)
     if count > settings.COURSE_SUPPORT_CHAT_MAX_CONNECTIONS_PER_USER:
-        cache.decr(key)
+        _release_connection(user_id)
         return False
-    cache.touch(key, timeout=3600)
+    cache.touch(key, timeout=ACTIVE_CONNECTION_TTL_SECONDS)
     return True
+
+
+def _refresh_connection(user_id):
+    cache.touch(f"course-support:active:{user_id}", timeout=ACTIVE_CONNECTION_TTL_SECONDS)
 
 
 def _release_connection(user_id):
     key = f"course-support:active:{user_id}"
-    value = cache.get(key, 0)
-    if value <= 1:
-        cache.delete(key)
-    else:
-        cache.decr(key)
+    try:
+        if cache.decr(key) <= 0:
+            cache.delete(key)
+    except ValueError:
+        pass
 
 
 _allow_rate_async = sync_to_async(_allow_rate, thread_sensitive=False)
 _claim_connection_async = sync_to_async(_claim_connection, thread_sensitive=False)
 _release_connection_async = sync_to_async(_release_connection, thread_sensitive=False)
+_refresh_connection_async = sync_to_async(_refresh_connection, thread_sensitive=False)
 
 
 @database_sync_to_async
@@ -126,6 +144,8 @@ class CourseSupportConsumer(AsyncJsonWebsocketConsumer):
         await self.receive_json(content)
 
     async def receive_json(self, content, **kwargs):
+        if getattr(self, "connection_claimed", False):
+            await _refresh_connection_async(self.scope["user"].pk)
         if not isinstance(content, dict):
             await self._error(None, "INVALID_EVENT", "The event must be a JSON object.")
             return

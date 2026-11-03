@@ -7,11 +7,18 @@ from rest_framework.response import Response
 from . import services
 from .models import Chapter, Course, CourseVersion, LearningActivity, Program, PublishStatus, Subtopic
 from .permissions import CanManageCurriculum, CanPublishCurriculum
-from .selectors import accessible_activities, accessible_chapters, accessible_courses, accessible_subtopics, course_structure_queryset, is_student
-from .serializers import (
-    ChapterSerializer, CourseSerializer, CourseVersionSerializer, DuplicateSerializer,
-    LearningActivitySerializer, ProgramSerializer, ReorderSerializer, SubtopicSerializer,
+from .selectors import (
+    accessible_activities, accessible_chapters, accessible_courses, accessible_subtopics,
+    activity_queryset, chapter_tree_queryset, course_structure_queryset, is_student,
 )
+from .serializers import (
+    ChapterSerializer, CourseSerializer, CourseSummarySerializer, CourseVersionSerializer, DuplicateSerializer,
+    LearningActivitySerializer, ProgramSerializer, ProgramSummarySerializer, ReorderSerializer, SubtopicSerializer,
+)
+
+
+def wants_summary(request) -> bool:
+    return request.query_params.get("view") == "summary"
 
 
 class CurriculumModelViewSet(viewsets.ModelViewSet):
@@ -22,8 +29,14 @@ class ProgramViewSet(CurriculumModelViewSet):
     queryset = Program.objects.all()
     serializer_class = ProgramSerializer
 
+    def get_serializer_class(self):
+        return ProgramSummarySerializer if self.action == "list" and wants_summary(self.request) else ProgramSerializer
+
     def get_queryset(self):
-        queryset = Program.objects.prefetch_related(Prefetch("courses", queryset=course_structure_queryset(self.request.user)))
+        if self.action == "list" and wants_summary(self.request):
+            queryset = Program.objects.all()
+        else:
+            queryset = Program.objects.prefetch_related(Prefetch("courses", queryset=course_structure_queryset(self.request.user)))
         if is_student(self.request.user):
             queryset = queryset.filter(status=PublishStatus.PUBLISHED, courses__in=accessible_courses(self.request.user)).distinct()
         return queryset
@@ -36,7 +49,12 @@ class CourseViewSet(CurriculumModelViewSet):
     queryset = Course.objects.all()
     serializer_class = CourseSerializer
 
+    def get_serializer_class(self):
+        return CourseSummarySerializer if self.action == "list" and wants_summary(self.request) else CourseSerializer
+
     def get_queryset(self):
+        if self.action == "list" and wants_summary(self.request):
+            return accessible_courses(self.request.user)
         return course_structure_queryset(self.request.user)
 
     def perform_create(self, serializer):
@@ -45,7 +63,7 @@ class CourseViewSet(CurriculumModelViewSet):
     @action(detail=True, methods=["get"])
     def chapters(self, request, pk=None):
         course = self.get_object()
-        chapters = accessible_chapters(request.user).filter(course_version__course=course)
+        chapters = chapter_tree_queryset(request.user).filter(course_version__course=course)
         return Response(ChapterSerializer(chapters, many=True, context={"request": request}).data)
 
     @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated, CanPublishCurriculum])
@@ -68,11 +86,12 @@ class CourseViewSet(CurriculumModelViewSet):
 
 
 class CourseVersionViewSet(CurriculumModelViewSet):
-    queryset = CourseVersion.objects.select_related("course", "created_by").prefetch_related("chapters")
+    queryset = CourseVersion.objects.select_related("course", "created_by")
     serializer_class = CourseVersionSerializer
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        chapters = chapter_tree_queryset(self.request.user).order_by("display_order")
+        queryset = super().get_queryset().prefetch_related(Prefetch("chapters", queryset=chapters))
         if is_student(self.request.user):
             queryset = queryset.filter(course__in=accessible_courses(self.request.user), status=PublishStatus.PUBLISHED)
         return queryset
@@ -93,14 +112,16 @@ class ChapterViewSet(CurriculumModelViewSet):
     serializer_class = ChapterSerializer
 
     def get_queryset(self):
-        return accessible_chapters(self.request.user).prefetch_related("subtopics__activities")
+        return chapter_tree_queryset(self.request.user)
 
     def perform_create(self, serializer):
         serializer.instance = services.create_chapter(actor=self.request.user, **serializer.validated_data)
 
     @action(detail=True, methods=["get"])
     def subtopics(self, request, pk=None):
-        items = accessible_subtopics(request.user).filter(chapter=self.get_object()).prefetch_related("activities")
+        items = accessible_subtopics(request.user).filter(chapter=self.get_object()).prefetch_related(
+            Prefetch("activities", queryset=activity_queryset())
+        )
         return Response(SubtopicSerializer(items, many=True, context={"request": request}).data)
 
     @action(detail=True, methods=["post"])
@@ -116,7 +137,9 @@ class SubtopicViewSet(CurriculumModelViewSet):
     serializer_class = SubtopicSerializer
 
     def get_queryset(self):
-        return accessible_subtopics(self.request.user).prefetch_related("activities")
+        return accessible_subtopics(self.request.user).prefetch_related(
+            Prefetch("activities", queryset=activity_queryset())
+        )
 
     def perform_create(self, serializer):
         serializer.instance = services.create_subtopic(actor=self.request.user, **serializer.validated_data)
@@ -143,6 +166,9 @@ class ActivityViewSet(CurriculumModelViewSet):
 
     def perform_create(self, serializer):
         serializer.instance = services.create_activity(actor=self.request.user, **serializer.validated_data)
+
+    def perform_destroy(self, instance):
+        services.delete_activity(actor=self.request.user, activity=instance)
 
     @action(detail=True, methods=["get"], url_path="workshop")
     def workshop(self, request, pk=None):

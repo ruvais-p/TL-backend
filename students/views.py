@@ -1,16 +1,20 @@
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db.models import Q
+from django.shortcuts import get_object_or_404
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from accounts.admission import portal_admission
 from accounts.serializers import UserSerializer
 from assessments.models import AssessmentAttempt
 from progress.models import ActivityProgress, BadgeAward, ChapterProgress, CourseProgress, PointEvent, SubtopicProgress
 
 from .permissions import CanAccessStudentDomain
 from .selectors import (
+    USER_SERIALIZER_PREFETCH,
     visible_assignments, visible_enrollments, visible_external_mappings,
     visible_memberships, visible_student_groups, visible_students,
 )
@@ -19,8 +23,8 @@ from .serializers import (
     StudentGroupMemberSerializer, StudentGroupSerializer,
 )
 from .services import (
-    add_student_to_group, create_course_assignment, create_enrollment,
-    create_student_group, upsert_external_mapping,
+    add_student_to_group, cancel_enrollment, create_course_assignment, create_enrollment,
+    create_student_group, update_enrollment, upsert_external_mapping,
 )
 
 User = get_user_model()
@@ -87,7 +91,7 @@ class StudentViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.
                         "status": subtopic_row.status if subtopic_row else "NOT_STARTED",
                         "progress_percentage": subtopic_row.progress_percentage if subtopic_row else 0,
                         "completed_activities": subtopic_row.completed_activities if subtopic_row else 0,
-                        "total_required_activities": subtopic_row.total_required_activities if subtopic_row else subtopic.activities.filter(is_required=True).count(),
+                        "total_required_activities": subtopic_row.total_required_activities if subtopic_row else sum(activity.is_required for activity in subtopic.activities.all()),
                         "activities": activities,
                     })
                 chapters.append({
@@ -95,7 +99,7 @@ class StudentViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.
                     "status": chapter_row.status if chapter_row else "NOT_STARTED",
                     "progress_percentage": chapter_row.progress_percentage if chapter_row else 0,
                     "completed_subtopics": chapter_row.completed_subtopics if chapter_row else 0,
-                    "total_subtopics": chapter_row.total_subtopics if chapter_row else chapter.subtopics.filter(is_required=True).count(),
+                    "total_subtopics": chapter_row.total_subtopics if chapter_row else sum(subtopic.is_required for subtopic in chapter.subtopics.all()),
                     "learning_check_score": chapter_row.learning_check_score if chapter_row else None,
                     "assessments": attempts_by_chapter.get(chapter.id, []), "subtopics": subtopics,
                 })
@@ -108,7 +112,7 @@ class StudentViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.
                 "status": course_row.status if course_row else "NOT_STARTED",
                 "progress_percentage": course_row.progress_percentage if course_row else 0,
                 "completed_chapters": course_row.completed_chapters if course_row else 0,
-                "total_chapters": course_row.total_chapters if course_row else enrollment.course_version.chapters.filter(is_required=True).count(),
+                "total_chapters": course_row.total_chapters if course_row else sum(chapter.is_required for chapter in enrollment.course_version.chapters.all()),
                 "average_score": course_row.average_score if course_row else 0,
                 "last_activity_at": course_row.last_activity_at if course_row else None,
                 "chapters": chapters,
@@ -156,7 +160,11 @@ class TeacherViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     permission_classes = [IsAuthenticated, CanAccessStudentDomain]
 
     def get_queryset(self):
-        return User.objects.filter(groups__name="TEACHER", is_active=True).distinct().prefetch_related("groups")
+        teachers = User.objects.filter(groups__name="TEACHER", is_active=True)
+        # Learners only see the teachers of their own student groups.
+        if not portal_admission(self.request.user, "staff").allowed:
+            teachers = teachers.filter(teaching_student_groups__memberships__student=self.request.user)
+        return teachers.distinct().prefetch_related(*USER_SERIALIZER_PREFETCH)
 
 
 class StudentGroupViewSet(viewsets.ModelViewSet):
@@ -171,7 +179,10 @@ class StudentGroupViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="members")
     def add_member(self, request, pk=None):
-        student = User.objects.get(pk=request.data.get("student"))
+        try:
+            student = get_object_or_404(User, pk=request.data.get("student"))
+        except ValidationError:
+            return Response({"student": ["Choose a valid student."]}, status=400)
         membership = add_student_to_group(actor=request.user, student_group=self.get_object(), student=student)
         return Response(StudentGroupMemberSerializer(membership).data)
 
@@ -196,6 +207,13 @@ class EnrollmentViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.instance = create_enrollment(actor=self.request.user, **serializer.validated_data)
+
+    def perform_update(self, serializer):
+        serializer.instance = update_enrollment(actor=self.request.user, enrollment=serializer.instance, **serializer.validated_data)
+
+    def perform_destroy(self, instance):
+        # Deleting would cascade away every progress row; cancel instead.
+        cancel_enrollment(actor=self.request.user, enrollment=instance)
 
 
 class CourseAssignmentViewSet(viewsets.ModelViewSet):
