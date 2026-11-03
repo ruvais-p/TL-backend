@@ -201,3 +201,13 @@ class AuditRegressionTests(TestCase):
 
     def test_reports_overview_is_staff_only(self):
         self.assertEqual(self._client(self.student).get("/api/v1/reports/overview/").status_code, 403)
+
+    # Video captions
+    def test_video_captions_are_validated_and_normalised(self):
+        from content.serializers import VideoSerializer
+        good = VideoSerializer().validate_captions([{"start": 0, "end": 2.5, "text": " Hello "}, {"start": 2.5, "end": 4, "text": "World"}])
+        self.assertEqual(good, [{"start": 0.0, "end": 2.5, "text": "Hello"}, {"start": 2.5, "end": 4.0, "text": "World"}])
+        from rest_framework.exceptions import ValidationError
+        for bad in ([{"start": 3, "end": 1, "text": "x"}], [{"start": 2, "end": 3, "text": "a"}, {"start": 1, "end": 2, "text": "b"}], [{"start": 0, "end": 1, "text": ""}], [{"start": "0", "end": 1, "text": "x"}], {"start": 0}):
+            with self.assertRaises(ValidationError):
+                VideoSerializer().validate_captions(bad)
