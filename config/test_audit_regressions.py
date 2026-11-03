@@ -183,3 +183,21 @@ class AuditRegressionTests(TestCase):
     @override_settings(MOODLE_SSO_SECRET="tella-dev-sso-secret-change-me")
     def test_placeholder_moodle_secret_disables_sso(self):
         self.assertEqual(self._moodle("someone@example.com", secret="tella-dev-sso-secret-change-me").status_code, 401)
+
+    # Reports
+    def test_reports_overview_summarises_visible_progress(self):
+        attempt = AssessmentService.start_attempt(student=self.student, learning_check=self.check)
+        AssessmentService.submit_attempt(student=self.student, attempt=attempt, answers=[self._answer(self.correct)])
+        response = self._client(self.admin).get("/api/v1/reports/overview/")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["totals"]["learners"], 1)
+        self.assertEqual(body["totals"]["active_enrollments"], 1)
+        self.assertEqual(body["totals"]["check_attempts"], 1)
+        self.assertEqual(body["totals"]["check_pass_rate"], 100.0)
+        self.assertEqual([course["name"] for course in body["courses"]], ["Audit course"])
+        self.assertEqual(len(body["activity"]), 8)
+        self.assertEqual([row["student_id"] for row in body["attention"]], [str(self.student.id)])
+
+    def test_reports_overview_is_staff_only(self):
+        self.assertEqual(self._client(self.student).get("/api/v1/reports/overview/").status_code, 403)
