@@ -28,6 +28,8 @@ def create_student_group(*, actor, **data):
 def add_student_to_group(*, actor, student_group, student):
     _require(actor, "students.manage_student_groups")
     _require_group(student, GroupName.STUDENT, "Group members must belong to the STUDENT Django Group.")
+    # Lock the group row so a concurrent course assignment cannot miss this member.
+    StudentGroup.objects.select_for_update().get(pk=student_group.pk)
     existing = StudentGroupMember.objects.select_for_update().filter(student_group=student_group, student=student).first()
     if existing:
         return existing
@@ -60,6 +62,36 @@ def create_enrollment(*, actor, student, course, course_version, status=Enrollme
     return Enrollment.objects.create(student=student, course=course, course_version=course_version, status=status, **data)
 
 
+ENROLLMENT_UPDATABLE_FIELDS = {"status", "expires_at", "started_at", "completed_at"}
+
+
+@transaction.atomic
+def update_enrollment(*, actor, enrollment, **data):
+    _require(actor, "students.manage_students")
+    enrollment = Enrollment.objects.select_for_update().get(pk=enrollment.pk)
+    for field in ("student", "course", "course_version"):
+        if field in data and getattr(enrollment, f"{field}_id") != data[field].pk:
+            raise ValidationError(
+                "Student, course and version cannot be changed on an existing enrollment. "
+                "Cancel it and create a new enrollment instead."
+            )
+    for field, value in data.items():
+        if field in ENROLLMENT_UPDATABLE_FIELDS:
+            setattr(enrollment, field, value)
+    enrollment.save()
+    return enrollment
+
+
+@transaction.atomic
+def cancel_enrollment(*, actor, enrollment):
+    _require(actor, "students.manage_students")
+    enrollment = Enrollment.objects.select_for_update().get(pk=enrollment.pk)
+    if enrollment.status != Enrollment.Status.CANCELLED:
+        enrollment.status = Enrollment.Status.CANCELLED
+        enrollment.save(update_fields=["status", "updated_at"])
+    return enrollment
+
+
 @transaction.atomic
 def create_course_assignment(*, actor, course, course_version, student_group=None, student=None, **data):
     _require(actor, "students.assign_course")
@@ -67,6 +99,8 @@ def create_course_assignment(*, actor, course, course_version, student_group=Non
         raise ValidationError("Exactly one of student_group or student is required.")
     if course_version.course_id != course.id:
         raise ValidationError("CourseVersion does not belong to Course.")
+    if student_group is not None:
+        StudentGroup.objects.select_for_update().get(pk=student_group.pk)
     assignment = CourseAssignment.objects.create(
         course=course, course_version=course_version, student_group=student_group,
         student=student, assigned_by=actor, **data,
@@ -74,22 +108,20 @@ def create_course_assignment(*, actor, course, course_version, student_group=Non
     student_ids = [student.pk] if student else list(
         StudentGroupMember.objects.select_for_update().filter(student_group=student_group).values_list("student_id", flat=True)
     )
-    created_count = 0
-    existing_count = 0
-    for student_id in student_ids:
-        current = Enrollment.objects.select_for_update().filter(
-            student_id=student_id, course=course, status=Enrollment.Status.ACTIVE,
-        ).first()
-        if current and current.course_version_id != course_version.id:
-            raise ValidationError(f"A targeted student already has an active enrollment in another version of {course.name}.")
-        if current is None:
-            Enrollment.objects.create(
-                student_id=student_id, course=course, course_version=course_version,
-                status=Enrollment.Status.ACTIVE,
-            )
-            created_count += 1
-        else:
-            existing_count += 1
+    current = {
+        enrollment.student_id: enrollment
+        for enrollment in Enrollment.objects.select_for_update().filter(
+            student_id__in=student_ids, course=course, status=Enrollment.Status.ACTIVE,
+        )
+    }
+    if any(enrollment.course_version_id != course_version.id for enrollment in current.values()):
+        raise ValidationError(f"A targeted student already has an active enrollment in another version of {course.name}.")
+    Enrollment.objects.bulk_create([
+        Enrollment(student_id=student_id, course=course, course_version=course_version, status=Enrollment.Status.ACTIVE)
+        for student_id in student_ids if student_id not in current
+    ])
+    existing_count = len(current)
+    created_count = len(student_ids) - existing_count
     assignment.enrollment_outcome = {"created": created_count, "existing": existing_count, "targeted": len(student_ids)}
     return assignment
 

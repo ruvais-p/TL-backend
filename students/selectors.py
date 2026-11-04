@@ -17,7 +17,11 @@ def is_student(user) -> bool:
 
 
 def visible_student_groups(user):
-    queryset = StudentGroup.objects.select_related("teacher").prefetch_related("memberships__student")
+    queryset = StudentGroup.objects.select_related("teacher").prefetch_related(
+        *(f"teacher__{path}" for path in USER_SERIALIZER_PREFETCH),
+        "memberships__student",
+        *(f"memberships__student__{path}" for path in USER_SERIALIZER_PREFETCH),
+    )
     if is_teacher(user):
         return queryset.filter(teacher=user)
     if is_student(user):
@@ -25,8 +29,14 @@ def visible_student_groups(user):
     return queryset
 
 
+USER_SERIALIZER_PREFETCH = (
+    "groups__permissions__content_type",
+    "user_permissions__content_type",
+)
+
+
 def visible_students(user):
-    queryset = User.objects.filter(groups__name=GroupName.STUDENT).distinct().prefetch_related("groups")
+    queryset = User.objects.filter(groups__name=GroupName.STUDENT).distinct().prefetch_related(*USER_SERIALIZER_PREFETCH)
     if is_teacher(user):
         return queryset.filter(student_group_memberships__student_group__teacher=user).distinct()
     if is_student(user):

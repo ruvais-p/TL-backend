@@ -87,6 +87,8 @@ class StaffApplicationAPITests(TestCase):
             f"/api/v1/opportunity-applications/{self.application.id}/resume/"
         )
         self.assertEqual(downloaded.status_code, 200)
+        for close in downloaded._resource_closers:  # release the file without firing request_finished
+            close()
 
         self.client.force_authenticate(self.teacher)
         denied = self.client.get(

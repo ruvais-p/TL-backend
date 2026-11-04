@@ -11,6 +11,21 @@ def is_student(user) -> bool:
     return user.groups.filter(name=GroupName.STUDENT).exists() and not user.is_superuser
 
 
+def enrolled_version_ids(user):
+    """Course versions the learner is actively enrolled in.
+
+    Learners stay pinned to their enrolled version even after a newer version
+    is published, so they never see content they cannot record progress on.
+    """
+    return Enrollment.objects.filter(
+        student=user, status=Enrollment.Status.ACTIVE,
+    ).filter(Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now())).values("course_version_id")
+
+
+def activity_queryset() -> QuerySet[LearningActivity]:
+    return LearningActivity.objects.select_related("content", "experiment").order_by("display_order")
+
+
 def accessible_courses(user) -> QuerySet[Course]:
     queryset = Course.objects.select_related("program", "thumbnail", "created_by", "updated_by")
     if is_student(user):
@@ -27,7 +42,7 @@ def accessible_courses(user) -> QuerySet[Course]:
 def course_structure_queryset(user) -> QuerySet[Course]:
     published_only = is_student(user)
     user._curriculum_is_student = published_only
-    activities = LearningActivity.objects.select_related("content", "experiment").order_by("display_order")
+    activities = activity_queryset()
     subtopics = Subtopic.objects.order_by("display_order")
     chapters = Chapter.objects.order_by("display_order")
     versions = CourseVersion.objects.order_by("-version_number")
@@ -35,7 +50,7 @@ def course_structure_queryset(user) -> QuerySet[Course]:
         activities = activities.filter(status=PublishStatus.PUBLISHED)
         subtopics = subtopics.filter(status=PublishStatus.PUBLISHED)
         chapters = chapters.filter(status=PublishStatus.PUBLISHED)
-        versions = versions.filter(status=PublishStatus.PUBLISHED)
+        versions = versions.filter(status=PublishStatus.PUBLISHED, id__in=enrolled_version_ids(user))
     subtopics = subtopics.prefetch_related(Prefetch("activities", queryset=activities))
     chapters = chapters.prefetch_related(Prefetch("subtopics", queryset=subtopics))
     versions = versions.prefetch_related(Prefetch("chapters", queryset=chapters))
@@ -49,9 +64,20 @@ def accessible_chapters(user) -> QuerySet[Chapter]:
         queryset = queryset.filter(
             course_version__course_id__in=course_ids,
             course_version__status=PublishStatus.PUBLISHED,
+            course_version_id__in=enrolled_version_ids(user),
             status=PublishStatus.PUBLISHED,
         )
     return queryset
+
+
+def chapter_tree_queryset(user) -> QuerySet[Chapter]:
+    activities = activity_queryset()
+    subtopics = Subtopic.objects.order_by("display_order")
+    if is_student(user):
+        activities = activities.filter(status=PublishStatus.PUBLISHED)
+        subtopics = subtopics.filter(status=PublishStatus.PUBLISHED)
+    subtopics = subtopics.prefetch_related(Prefetch("activities", queryset=activities))
+    return accessible_chapters(user).prefetch_related(Prefetch("subtopics", queryset=subtopics))
 
 
 def accessible_subtopics(user) -> QuerySet[Subtopic]:

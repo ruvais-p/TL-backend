@@ -18,6 +18,13 @@ ALLOWED_RESUME_MIME_TYPES = frozenset(
 )
 
 
+RESUME_SIGNATURES = {
+    "application/pdf": b"%PDF",
+    "application/msword": b"\xd0\xcf\x11\xe0",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": b"PK\x03\x04",
+}
+
+
 class ResumeValidationError(Exception):
     pass
 
@@ -37,6 +44,12 @@ def validate_resume(upload):
         raise ResumeValidationError("Resume files cannot be empty.")
     if upload.content_type not in ALLOWED_RESUME_MIME_TYPES:
         raise ResumeValidationError("Upload a PDF, DOC, or DOCX resume.")
+    # The multipart content type is client-controlled, so check the file's
+    # own signature as well.
+    head = upload.read(8)
+    upload.seek(0)
+    if not head.startswith(RESUME_SIGNATURES[upload.content_type]):
+        raise ResumeValidationError("The file contents do not match a PDF, DOC, or DOCX resume.")
 
 
 def store_resume(*, application, upload):

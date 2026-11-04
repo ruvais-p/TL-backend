@@ -88,10 +88,32 @@ class CaseStudyQuestionSerializer(serializers.ModelSerializer):
 
 
 class AssessmentAttemptSerializer(serializers.ModelSerializer):
+    review = serializers.SerializerMethodField()
+
     class Meta:
         model = AssessmentAttempt
         fields = "__all__"
         read_only_fields = ("student", "attempt_number", "score", "max_score", "percentage", "status", "passed", "submitted_at")
+
+    def get_review(self, obj):
+        """Per-question feedback for a graded attempt.
+
+        Learners always see which answers were right. Explanations (which often
+        reveal the answer) appear once they have passed or used every attempt.
+        """
+        if obj.status != AssessmentAttempt.Status.GRADED:
+            return None
+        used = AssessmentAttempt.objects.filter(student_id=obj.student_id, learning_check_id=obj.learning_check_id).count()
+        reveal = bool(obj.passed) or used >= obj.learning_check.max_attempts
+        return [
+            {
+                "question": str(answer.question_id),
+                "is_correct": answer.is_correct,
+                "marks_awarded": answer.marks_awarded,
+                "explanation": answer.question.explanation if reveal else "",
+            }
+            for answer in obj.answers.select_related("question").all()
+        ]
 
 
 class SubmitAttemptSerializer(serializers.Serializer):

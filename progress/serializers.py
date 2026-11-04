@@ -51,7 +51,7 @@ class ProgressUpsertSerializer(serializers.Serializer):
     progress_percentage = serializers.DecimalField(min_value=0, max_value=100, max_digits=5, decimal_places=2, required=False)
     time_spent_seconds = serializers.IntegerField(min_value=0, required=False, default=0)
     metadata = serializers.JSONField(required=False, default=dict)
-    status = serializers.CharField(required=False, default="in_progress")
+    status = serializers.CharField(required=False, allow_blank=True, default="")
     extra = serializers.JSONField(required=False, default=dict)
     event = serializers.CharField(required=False, allow_blank=True)
 

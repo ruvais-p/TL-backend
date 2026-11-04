@@ -5,6 +5,7 @@ import uuid
 
 from django.conf import settings
 from django.contrib.auth.models import Group
+from django.core.cache import cache
 from django.db.models import Count, Q
 from rest_framework import status
 from rest_framework import mixins, viewsets
@@ -16,7 +17,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken, TokenError
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .permissions import CanManagePermissions, CanManageUsers, active_permission_queryset
+from .permissions import CanManagePermissions, CanManageUsers, IsStaffPortalUser, active_permission_queryset
 from .serializers import (
     Auth0ExchangeSerializer,
     EmailTokenObtainPairSerializer,
@@ -35,6 +36,8 @@ from students.models import ExternalUserMapping
 
 class LoginView(TokenObtainPairView):
     serializer_class = EmailTokenObtainPairSerializer
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_login"
 
 
 def token_pair_for_user(user, auth_method: str):
@@ -90,7 +93,10 @@ class MeView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        return Response(UserSerializer(request.user).data)
+        return Response({
+            **UserSerializer(request.user).data,
+            "features": {"support_chat": bool(getattr(settings, "COURSE_SUPPORT_CHAT_ENABLED", False))},
+        })
 
 
 class LogoutView(APIView):
@@ -113,9 +119,26 @@ class LogoutView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+MOODLE_SSO_WINDOW_SECONDS = 300
+PLACEHOLDER_SECRET_MARKERS = ("change-me", "changeme", "change-before", "replace-with", "local-only", "dev-only")
+
+
+def moodle_secret_is_usable(secret: str) -> bool:
+    lowered = (secret or "").lower()
+    return len(lowered) >= 32 and not any(marker in lowered for marker in PLACEHOLDER_SECRET_MARKERS)
+
+
+def is_learner_only(user) -> bool:
+    if user.is_staff or user.is_superuser:
+        return False
+    return set(user.groups.values_list("name", flat=True)) <= {GroupName.STUDENT}
+
+
 class MoodleExchangeView(APIView):
 
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "auth_login"
 
     def post(self, request):
         external_id = str(request.data.get("moodle_user_id") or "").strip()
@@ -125,28 +148,45 @@ class MoodleExchangeView(APIView):
             timestamp = int(request.data.get("timestamp"))
         except (TypeError, ValueError):
             timestamp = 0
-        if not external_id or not email or not signature or abs(time.time() - timestamp) > 300:
+        if not external_id or not email or not signature or abs(time.time() - timestamp) > MOODLE_SSO_WINDOW_SECONDS:
             return Response({"error": {"code": "INVALID_SSO_REQUEST", "message": "Invalid or expired SSO request.", "details": {}}}, status=401)
+        secret = settings.MOODLE_SSO_SECRET
+        if not moodle_secret_is_usable(secret):
+            return Response({"error": {"code": "SSO_DISABLED", "message": "Moodle sign in is not configured.", "details": {}}}, status=401)
         payload = f"{external_id}|{email}|{timestamp}"
-        expected = hmac.new(settings.MOODLE_SSO_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
-        if not settings.MOODLE_SSO_SECRET or not hmac.compare_digest(expected, signature):
+        expected = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, signature):
             return Response({"error": {"code": "INVALID_SSO_SIGNATURE", "message": "Invalid SSO signature.", "details": {}}}, status=401)
+        # Each signed request is single-use within its validity window.
+        if not cache.add(f"moodle-sso:{expected}", 1, timeout=MOODLE_SSO_WINDOW_SECONDS * 2):
+            return Response({"error": {"code": "SSO_REPLAYED", "message": "This sign in link has already been used.", "details": {}}}, status=401)
         mapping = ExternalUserMapping.objects.select_related("user").filter(
             provider=ExternalUserMapping.Provider.MOODLE, external_user_id=external_id,
         ).first()
-        user = mapping.user if mapping else User.objects.filter(email=email).first()
-        if user is None:
+        if mapping:
+            user = mapping.user
+        else:
+            user = User.objects.filter(email__iexact=email).first()
+            # Never hand a Moodle identity an existing staff account by email.
+            if user is not None and not is_learner_only(user):
+                return Response({"error": {"code": "SSO_ACCOUNT_CONFLICT", "message": "This account cannot sign in through Moodle.", "details": {}}}, status=403)
+        if user is not None and not user.is_active:
+            return Response({"error": {"code": "ACCOUNT_INACTIVE", "message": "This account is inactive.", "details": {}}}, status=403)
+        created = user is None
+        if created:
             user = User.objects.create_user(
                 email=email, username=f"moodle-{external_id}",
-                first_name=request.data.get("first_name", ""),
-                last_name=request.data.get("last_name", ""),
+                first_name=str(request.data.get("first_name", ""))[:150],
+                last_name=str(request.data.get("last_name", ""))[:150],
             )
-        ExternalUserMapping.objects.update_or_create(
-            provider=ExternalUserMapping.Provider.MOODLE, external_user_id=external_id,
-            defaults={"user": user, "metadata": {"email": email}},
-        )
-        student_group, _ = Group.objects.get_or_create(name=GroupName.STUDENT)
-        user.groups.add(student_group)
+        if not mapping:
+            ExternalUserMapping.objects.create(
+                provider=ExternalUserMapping.Provider.MOODLE, external_user_id=external_id,
+                user=user, metadata={"email": email},
+            )
+        if created or is_learner_only(user):
+            student_group, _ = Group.objects.get_or_create(name=GroupName.STUDENT)
+            user.groups.add(student_group)
         tokens = token_pair_for_user(user, "moodle")
         return Response({**tokens, "user": UserSerializer(user).data})
 
@@ -214,7 +254,7 @@ class PermissionCatalogView(APIView):
 
 
 class StaffSummaryView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsStaffPortalUser]
 
     def get(self, request):
         from curriculum.models import Program

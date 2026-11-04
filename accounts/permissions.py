@@ -110,3 +110,12 @@ class HasModelPermission(BasePermission):
         return request.user.has_perm(
             f"{model._meta.app_label}.{action}_{model._meta.model_name}"
         )
+
+
+class IsStaffPortalUser(BasePermission):
+    """Admits users who may use the staff workspace."""
+
+    def has_permission(self, request, view):
+        from .admission import portal_admission
+
+        return bool(request.user and request.user.is_authenticated and portal_admission(request.user, "staff").allowed)

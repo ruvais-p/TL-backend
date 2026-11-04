@@ -32,27 +32,63 @@ class ProgressService:
             raise ValidationError("progress_percentage must be between 0 and 100.")
         return value.quantize(Decimal("0.01"))
 
+    STATUSES = {"NOT_STARTED", "IN_PROGRESS", "COMPLETED"}
+    # Upper bound for one write's time delta, so a stale tab cannot inflate totals.
+    MAX_TIME_DELTA_SECONDS = 4 * 60 * 60
+
+    @classmethod
+    def normalize_status(cls, status):
+        if status is None or status == "":
+            return None
+        value = str(status).strip().upper()
+        if value not in cls.STATUSES:
+            raise ValidationError("status must be one of not_started, in_progress or completed.")
+        return value
+
+    @staticmethod
+    def is_completed(progress):
+        return str(progress.status).upper() == "COMPLETED" or progress.progress_percentage >= 100
+
     @classmethod
     @transaction.atomic
     def record_activity_progress(cls, *, student, activity, progress_percentage, time_spent_seconds=0,
                                  status=None, metadata=None, enrollment=None):
-        enrollment = enrollment or cls._enrollment(student, activity)
+        """Record activity progress for a learner and roll it up.
+
+        Completion is monotonic: a lower percentage or a fresh start never
+        un-completes an activity. ``time_spent_seconds`` is a delta that is
+        added to the stored total.
+        """
+        # Always hold the enrollment row lock: it serializes concurrent writes
+        # for the same learner so rollup counts never read stale siblings.
+        if enrollment is None:
+            enrollment = cls._enrollment(student, activity)
+        else:
+            enrollment = Enrollment.objects.select_for_update().get(pk=enrollment.pk)
+        status = cls.normalize_status(status)
         percentage = cls._percent(progress_percentage)
         now = timezone.now()
-        progress, _ = ActivityProgress.objects.select_for_update().get_or_create(
+        progress, created = ActivityProgress.objects.select_for_update().get_or_create(
             enrollment=enrollment, activity=activity,
         )
-        progress.progress_percentage = percentage
-        progress.time_spent_seconds = max(0, int(time_spent_seconds or 0))
+        was_completed = not created and cls.is_completed(progress)
+        progress.progress_percentage = max(Decimal(str(progress.progress_percentage or 0)), percentage)
+        delta = min(max(0, int(time_spent_seconds or 0)), cls.MAX_TIME_DELTA_SECONDS)
+        progress.time_spent_seconds = (progress.time_spent_seconds or 0) + delta
         progress.last_accessed_at = now
         progress.started_at = progress.started_at or now
         progress.metadata = metadata if metadata is not None else progress.metadata
-        progress.status = status or ("COMPLETED" if percentage >= 100 else "IN_PROGRESS")
-        if progress.status.lower() == "completed" or percentage >= 100:
+        if was_completed or status == "COMPLETED" or progress.progress_percentage >= 100:
             progress.status = "COMPLETED"
+            progress.progress_percentage = Decimal("100.00")
             progress.completed_at = progress.completed_at or now
+        else:
+            progress.status = "IN_PROGRESS"
+            progress.completed_at = None
         progress.save()
-        cls.recalculate_subtopic(enrollment=enrollment, subtopic=activity.subtopic)
+        # Only completion changes affect the rollups.
+        if created or was_completed != cls.is_completed(progress):
+            cls.recalculate_subtopic(enrollment=enrollment, subtopic=activity.subtopic)
         return progress
 
     @classmethod

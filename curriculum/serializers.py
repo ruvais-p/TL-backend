@@ -100,13 +100,37 @@ class CourseSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if not request or not request.user.is_authenticated:
             return False
-        from tutoring.services import chatbot_available_for
+        from tutoring.services import chatbot_available_course_ids
 
         # The course selector records this once per request, avoiding a group
         # lookup for every serialized course while remaining false by default.
         if not getattr(request.user, "_curriculum_is_student", False):
             return False
-        return chatbot_available_for(student=request.user, course_id=obj.id)
+        available = getattr(request, "_chatbot_course_ids", None)
+        if available is None:
+            available = request._chatbot_course_ids = chatbot_available_course_ids(student=request.user)
+        return obj.id in available
+
+
+class CourseSummarySerializer(serializers.ModelSerializer):
+    """Flat course row for tables and pickers; omits the curriculum tree."""
+
+    program_name = serializers.CharField(source="program.name", read_only=True)
+
+    class Meta:
+        model = Course
+        fields = (
+            "id", "program", "program_name", "name", "code", "description", "thumbnail",
+            "status", "display_order", "created_at", "updated_at",
+        )
+        read_only_fields = fields
+
+
+class ProgramSummarySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Program
+        fields = ("id", "name", "code", "description", "grade", "status", "created_at", "updated_at")
+        read_only_fields = fields
 
 
 class ProgramSerializer(serializers.ModelSerializer):

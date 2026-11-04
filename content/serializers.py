@@ -21,6 +21,35 @@ class VideoSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ("created_at", "updated_at")
 
+    MAX_CAPTION_CUES = 2000
+    MAX_CAPTION_TEXT = 500
+
+    def validate_captions(self, value):
+        """Captions are timed cues: [{"start": seconds, "end": seconds, "text": "..."}], in order."""
+        if not isinstance(value, list):
+            raise serializers.ValidationError("Captions must be a list of cues.")
+        if len(value) > self.MAX_CAPTION_CUES:
+            raise serializers.ValidationError(f"Use at most {self.MAX_CAPTION_CUES} caption cues.")
+        cues = []
+        previous_start = 0.0
+        for index, cue in enumerate(value, start=1):
+            if not isinstance(cue, dict):
+                raise serializers.ValidationError(f"Cue {index} must be an object with start, end and text.")
+            start, end, text = cue.get("start"), cue.get("end"), cue.get("text")
+            if isinstance(start, bool) or isinstance(end, bool) or not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
+                raise serializers.ValidationError(f"Cue {index} needs numeric start and end times in seconds.")
+            if start < 0 or end <= start:
+                raise serializers.ValidationError(f"Cue {index} must end after it starts.")
+            if start < previous_start:
+                raise serializers.ValidationError(f"Cue {index} starts before the previous cue; keep cues in time order.")
+            if not isinstance(text, str) or not text.strip():
+                raise serializers.ValidationError(f"Cue {index} needs caption text.")
+            if len(text) > self.MAX_CAPTION_TEXT:
+                raise serializers.ValidationError(f"Cue {index} is longer than {self.MAX_CAPTION_TEXT} characters.")
+            previous_start = float(start)
+            cues.append({"start": round(float(start), 3), "end": round(float(end), 3), "text": text.strip()})
+        return cues
+
 
 class ExperimentSerializer(serializers.ModelSerializer):
     class Meta:

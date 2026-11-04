@@ -5,6 +5,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
 from tutoring.models import CourseChatSession
+from tutoring.purge import delete_in_batches
 
 
 class Command(BaseCommand):
@@ -16,6 +17,5 @@ class Command(BaseCommand):
             raise CommandError("COURSE_CHAT_RETENTION_DAYS must be at least 1.")
         cutoff = timezone.now() - timedelta(days=retention_days)
         sessions = CourseChatSession.objects.filter(updated_at__lt=cutoff)
-        count = sessions.count()
-        sessions.delete()
+        count = delete_in_batches(sessions)
         self.stdout.write(self.style.SUCCESS(f"Deleted {count} expired course chat sessions."))

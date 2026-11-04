@@ -6,6 +6,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from tutoring.models import CourseSupportConversation, CourseSupportSocketTicket
+from tutoring.purge import delete_in_batches
 
 
 class Command(BaseCommand):
@@ -36,8 +37,8 @@ class Command(BaseCommand):
         ticket_count = tickets.count()
 
         if not options["dry_run"]:
-            conversations.delete()
-            tickets.delete()
+            delete_in_batches(conversations)
+            delete_in_batches(tickets)
 
         action = "Would delete" if options["dry_run"] else "Deleted"
         self.stdout.write(self.style.SUCCESS(

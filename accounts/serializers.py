@@ -8,7 +8,8 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .models import Auth0Identity, User
 from .permissions import active_permission_queryset, filter_active_permission_keys
 from .services import create_managed_user, update_managed_user
-from .admission import PORTALS, portal_admission
+from .admission import PORTALS, STAFF_GROUPS, portal_admission
+from .constants import GroupName
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -26,16 +27,39 @@ class UserSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ("is_superuser",)
 
+    @staticmethod
+    def _group_names(obj) -> list[str]:
+        # Sorting in Python keeps prefetched groups usable (no query per user).
+        cached = getattr(obj, "_serialized_group_names", None)
+        if cached is None:
+            cached = obj._serialized_group_names = sorted(group.name for group in obj.groups.all())
+        return cached
+
     def get_groups(self, obj) -> list[str]:
-        return list(obj.groups.order_by("name").values_list("name", flat=True))
+        return self._group_names(obj)
 
     def get_permissions(self, obj) -> list[str]:
+        prefetched = getattr(obj, "_prefetched_objects_cache", {})
+        if not obj.is_superuser and "user_permissions" in prefetched and "groups" in prefetched:
+            keys = {
+                f"{permission.content_type.app_label}.{permission.codename}"
+                for permission in obj.user_permissions.all()
+            }
+            for group in obj.groups.all():
+                keys.update(
+                    f"{permission.content_type.app_label}.{permission.codename}"
+                    for permission in group.permissions.all()
+                )
+            return filter_active_permission_keys(keys)
         return filter_active_permission_keys(obj.get_all_permissions())
 
     def get_portal_access(self, obj) -> dict[str, bool]:
+        if not obj.is_active:
+            return {"staff": False, "learner": False}
+        names = set(self._group_names(obj))
         return {
-            "staff": portal_admission(obj, "staff").allowed,
-            "learner": portal_admission(obj, "learner").allowed,
+            "staff": obj.is_superuser or bool(names & STAFF_GROUPS),
+            "learner": GroupName.STUDENT in names,
         }
 
 

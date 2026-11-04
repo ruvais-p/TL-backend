@@ -11,7 +11,11 @@ from rest_framework.views import APIView
 from accounts.permissions import IsStudent
 
 from . import services
-from .models import CourseChatbotConfig, CourseSupportConversation
+from django.db.models import OuterRef, Subquery
+
+from students.models import CourseAssignment, StudentGroup
+
+from .models import CourseChatbotConfig, CourseSupportConversation, CourseSupportMessage, CourseSupportReadState
 from .permissions import CanManageCourseChatbot
 from .selectors import active_course_enrollment, visible_support_conversations
 from .serializers import (
@@ -146,9 +150,21 @@ class StaffSupportConversationListView(SupportChatEnabledMixin, APIView):
                 course_version__assignments__student_group_id=value,
                 course_version__assignments__status="ACTIVE",
             ).distinct()
+        queryset = queryset.annotate(
+            actor_last_read=Subquery(
+                CourseSupportReadState.objects.filter(conversation=OuterRef("pk"), user=request.user)
+                .values("last_read_sequence")[:1]
+            ),
+            last_message_id=Subquery(
+                CourseSupportMessage.objects.filter(conversation=OuterRef("pk"))
+                .order_by("-sequence").values("id")[:1]
+            ),
+        )
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, request, view=self)
-        serializer = CourseSupportConversationSerializer(page, many=True, context={"request": request})
+        serializer = CourseSupportConversationSerializer(
+            page, many=True, context={"request": request, **support_list_context(request.user, page)}
+        )
         return paginator.get_paginated_response(serializer.data)
 
 
@@ -234,3 +250,40 @@ class SupportSocketTicketView(SupportChatEnabledMixin, APIView):
             "expires_at": ticket.expires_at,
             "websocket_url": settings.COURSE_SUPPORT_CHAT_WEBSOCKET_URL,
         }, status=201)
+
+
+def support_list_context(user, conversations):
+    """Batch the per-row lookups of the staff conversation list into a few queries.
+
+    Rows already come from ``visible_support_conversations`` and the caller holds
+    a staff support permission, so the send/close flags are the same for every row.
+    """
+    conversations = list(conversations)
+    message_ids = [row.last_message_id for row in conversations if row.last_message_id]
+    last_messages = {
+        message.id: message
+        for message in CourseSupportMessage.objects.select_related("sender").filter(id__in=message_ids)
+    }
+    groups_by_pair = {}
+    rows = StudentGroup.objects.filter(
+        status=StudentGroup.Status.ACTIVE,
+        memberships__student_id__in={row.student_id for row in conversations},
+        course_assignments__course_version_id__in={row.course_version_id for row in conversations},
+        course_assignments__status=CourseAssignment.Status.ACTIVE,
+    ).values("id", "name", "code", "memberships__student_id", "course_assignments__course_version_id").distinct()
+    for row in rows:
+        key = (row["memberships__student_id"], row["course_assignments__course_version_id"])
+        entry = {"id": row["id"], "name": row["name"], "code": row["code"]}
+        if entry not in groups_by_pair.setdefault(key, []):
+            groups_by_pair[key].append(entry)
+    return {
+        "last_messages": last_messages,
+        "groups_by_pair": groups_by_pair,
+        "staff_flags": {
+            "can_send": bool(
+                user.has_perm("tutoring.reply_to_assigned_course_support_chats")
+                or user.has_perm("tutoring.view_all_course_support_chats")
+            ),
+            "can_close": user.has_perm("tutoring.close_course_support_chats"),
+        },
+    }

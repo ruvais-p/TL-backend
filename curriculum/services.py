@@ -60,6 +60,20 @@ def publish_course_version(*, actor, version: CourseVersion) -> CourseVersion:
 
 
 @transaction.atomic
+def delete_activity(*, actor, activity: LearningActivity) -> None:
+    """Delete an activity and refresh the progress rollups that counted it."""
+    from progress.models import SubtopicProgress
+    from progress.services import ProgressService
+
+    _require(actor, "curriculum.delete_learningactivity")
+    subtopic = activity.subtopic
+    enrollments = [row.enrollment for row in SubtopicProgress.objects.select_related("enrollment__course_version").filter(subtopic=subtopic)]
+    activity.delete()
+    for enrollment in enrollments:
+        ProgressService.recalculate_subtopic(enrollment=enrollment, subtopic=subtopic)
+
+
+@transaction.atomic
 def publish_chapter(*, actor, chapter: Chapter) -> Chapter:
     _require(actor, "curriculum.publish_chapter")
     locked = Chapter.objects.select_for_update().get(pk=chapter.pk)

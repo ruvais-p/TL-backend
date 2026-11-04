@@ -116,6 +116,22 @@ def chatbot_available_for(*, student, course_id) -> bool:
     ).exclude(approved_context="").exists()
 
 
+def chatbot_available_course_ids(*, student) -> set:
+    """Course ids with an enabled tutor for the learner's active enrollments, in one query."""
+    version_ids = Enrollment.objects.filter(
+        student=student,
+        status=Enrollment.Status.ACTIVE,
+        course__status=PublishStatus.PUBLISHED,
+        course__program__status=PublishStatus.PUBLISHED,
+        course_version__status=PublishStatus.PUBLISHED,
+    ).filter(Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now())).values("course_version_id")
+    return set(
+        CourseChatbotConfig.objects.filter(course_version_id__in=version_ids, is_enabled=True)
+        .exclude(approved_context="")
+        .values_list("course_version__course_id", flat=True)
+    )
+
+
 @transaction.atomic
 def get_or_create_support_conversation(*, student, course_id):
     enrollment = active_course_enrollment(student=student, course_id=course_id)
@@ -290,8 +306,9 @@ def issue_support_socket_ticket(*, user, portal: str):
     return ticket, token
 
 
-@transaction.atomic
 def send_course_chat(*, student, course_id, message: str, session_id=None) -> ChatResult:
+    # The provider call can take many seconds, so no transaction or row lock
+    # is held while it runs; messages are persisted in a short atomic block.
     enrollment = _active_enrollment(student=student, course_id=course_id)
     if not enrollment:
         raise ChatAccessError
@@ -307,7 +324,7 @@ def send_course_chat(*, student, course_id, message: str, session_id=None) -> Ch
 
     if session_id:
         try:
-            session = CourseChatSession.objects.select_for_update().get(
+            session = CourseChatSession.objects.get(
                 pk=session_id,
                 student=student,
                 course_version=enrollment.course_version,
@@ -317,13 +334,10 @@ def send_course_chat(*, student, course_id, message: str, session_id=None) -> Ch
         except CourseChatSession.DoesNotExist as exc:
             raise ChatAccessError from exc
     else:
-        session = CourseChatSession.objects.create(
-            student=student,
-            course_version=enrollment.course_version,
-            context_revision=config.context_revision,
-        )
+        # Created only after the provider succeeds, so failures leave nothing behind.
+        session = None
 
-    recent = list(session.messages.order_by("-created_at")[:settings.COURSE_CHAT_HISTORY_MESSAGES])
+    recent = list(session.messages.order_by("-created_at")[:settings.COURSE_CHAT_HISTORY_MESSAGES]) if session else []
     history = [{"role": row.role, "content": row.content} for row in reversed(recent)]
     chunks = select_context_chunks(config.approved_context, message, history)
 
@@ -337,7 +351,7 @@ def send_course_chat(*, student, course_id, message: str, session_id=None) -> Ch
         except (MathTutorProviderError, ValueError) as exc:
             logger.warning(
                 "course_chat_provider_failure session=%s version=%s code=%s",
-                session.id,
+                session.id if session else "new",
                 enrollment.course_version_id,
                 getattr(exc, "code", "request_too_large"),
             )
@@ -348,14 +362,25 @@ def send_course_chat(*, student, course_id, message: str, session_id=None) -> Ch
             citations = validated.citations
             grounded = True
 
-    CourseChatMessage.objects.create(session=session, role=CourseChatMessage.Role.USER, content=message)
-    CourseChatMessage.objects.create(
-        session=session,
-        role=CourseChatMessage.Role.ASSISTANT,
-        content=reply,
-        citations=citations,
-    )
-    session.save(update_fields=["updated_at"])
+    with transaction.atomic():
+        if session is None:
+            session = CourseChatSession.objects.create(
+                student=student,
+                course_version=enrollment.course_version,
+                context_revision=config.context_revision,
+            )
+        else:
+            session = CourseChatSession.objects.select_for_update().filter(pk=session.pk, is_active=True).first()
+            if session is None:
+                raise ChatAccessError
+        CourseChatMessage.objects.create(session=session, role=CourseChatMessage.Role.USER, content=message)
+        CourseChatMessage.objects.create(
+            session=session,
+            role=CourseChatMessage.Role.ASSISTANT,
+            content=reply,
+            citations=citations,
+        )
+        session.save(update_fields=["updated_at"])
     logger.info(
         "course_chat_complete session=%s version=%s grounded=%s chunks=%s",
         session.id,
